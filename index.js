@@ -154,20 +154,37 @@ async function checkAllEndpoints() {
         }
     }
 
-    // Send one message per group
-    for (const [key, {slots, nextSlot, searchUrl}] of groupMap.entries()) {
-        const currentHash = hashSlots(slots);
+    // --------------------
+    // Send messages per group
+    // --------------------
+    function normalizeSlot(slot) {
+        // Keep only YYYY-MM-DDTHH:MM to avoid duplicates from seconds or formatting
+        return slot.slice(0, 16);
+    }
 
-        if (lastSlots[key]?.hash === currentHash && lastSlots[key]?.next_slot === nextSlot) {
+    for (const [key, {slots, nextSlot, searchUrl}] of groupMap.entries()) {
+        // Ensure lastSlots[key] exists
+        if (!lastSlots[key]) lastSlots[key] = { notifiedSlots: [], next_slot: null };
+        if (!Array.isArray(lastSlots[key].notifiedSlots)) lastSlots[key].notifiedSlots = [];
+
+        const alreadyNotified = new Set(lastSlots[key].notifiedSlots.map(normalizeSlot));
+        const newSlotsNormalized = slots.filter(s => !alreadyNotified.has(normalizeSlot(s)));
+
+        if (!newSlotsNormalized.length && lastSlots[key].next_slot === nextSlot) {
             console.log(`ℹ️ No new slots for ${key}`);
             continue;
         }
 
+        // Build message
         let msgLines = [`🩺 ${key}`, `🔗 Doctolib: ${searchUrl}`];
 
-        if (slots.length) {
-            msgLines.push("🚨 New slots available:\n" + slots.map(s => `- ${formatFrenchDate(s)}`).join("\n"));
+        if (newSlotsNormalized.length) {
+            msgLines.push(
+                "🚨 New slots available:\n" +
+                newSlotsNormalized.map(s => `- ${formatFrenchDate(s)}`).join("\n")
+            );
         }
+
         if (nextSlot) {
             msgLines.push(`📅 Next slot: ${formatFrenchDate(nextSlot)}`);
         }
@@ -176,10 +193,17 @@ async function checkAllEndpoints() {
         console.log(msg);
         await sendTelegram(msg);
 
-        lastSlots[key] = {slots, next_slot: nextSlot, hash: currentHash};
+        // Update notified slots safely
+        lastSlots[key].notifiedSlots.push(...newSlotsNormalized.map(normalizeSlot));
+        lastSlots[key].notifiedSlots = [...new Set(lastSlots[key].notifiedSlots)];
+        lastSlots[key].next_slot = nextSlot;
+
         saveLastSlots(lastSlots);
     }
 
+    // --------------------
+    // Wait before next check
+    // --------------------
     const delay = Math.floor(Math.random() * (12 - 8 + 1) + 8) * 60_000;
     console.log(`⏱ Waiting ${Math.floor(delay / 60000)} min until next check...\n`);
     setTimeout(checkAllEndpoints, delay);
