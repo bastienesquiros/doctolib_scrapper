@@ -2,8 +2,7 @@ import puppeteer from "puppeteer";
 import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
-import crypto from "crypto";
-import {URL} from "url";
+import { URL } from "url";
 import 'dotenv/config';
 
 // --------------------
@@ -12,24 +11,27 @@ import 'dotenv/config';
 const STATE_FILE = path.join(process.cwd(), "lastSlots.json");
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
-const SEARCH_URLS = ["https://www.doctolib.fr/search?keyword=dermatologue&location=toulouse&availabilitiesBefore=14", "https://www.doctolib.fr/search?keyword=dermatologue&location=bordeaux&availabilitiesBefore=14"];
+const SEARCH_URLS = [
+    "https://www.doctolib.fr/search?keyword=dermatologue&location=toulouse&availabilitiesBefore=14",
+    "https://www.doctolib.fr/search?keyword=dermatologue&location=bordeaux&availabilitiesBefore=14"
+];
 
 // --------------------
 // Utils
 // --------------------
-function loadLastSlots() {
+const loadLastSlots = () => {
     try {
         return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
     } catch {
         return {};
     }
-}
+};
 
-function saveLastSlots(data) {
+const saveLastSlots = (data) => {
     fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
-}
+};
 
-function formatFrenchDate(isoString) {
+const formatFrenchDate = (isoString) => {
     const date = new Date(isoString);
     const options = {
         timeZone: "Europe/Paris",
@@ -41,141 +43,131 @@ function formatFrenchDate(isoString) {
         minute: "2-digit",
     };
     return date.toLocaleDateString("fr-FR", options);
-}
+};
 
-function parseUrl(url) {
+const parseUrl = (url) => {
     const u = new URL(url);
     const city = u.searchParams.get("location")?.toUpperCase() || "UNKNOWN";
-    const keyword = u.searchParams.get("keyword").toUpperCase() || "UNKNOWN";
-    return {city, keyword};
-}
+    const keyword = u.searchParams.get("keyword")?.toUpperCase() || "UNKNOWN";
+    return { city, keyword };
+};
 
-async function sendTelegram(message) {
+const sendTelegram = async (message) => {
     if (!TELEGRAM_TOKEN || !CHAT_ID) return console.warn("⚠️ Telegram token/Chat ID not set in .env");
-    const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
     try {
-        const res = await fetch(url, {
+        const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
             method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({chat_id: CHAT_ID, text: message}),
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: CHAT_ID, text: message }),
         });
         const data = await res.json();
         if (!data.ok) console.error("❌ Telegram error:", data);
     } catch (err) {
-        console.error("❌ Fetch error:", err);
+        console.error("❌ Telegram fetch error:", err);
     }
-}
+};
 
-function hashSlots(slots) {
-    return crypto.createHash("md5").update(slots.join(",")).digest("hex");
-}
+// Normalize slots to avoid duplicates (ignore seconds)
+const normalizeSlot = (slot) => slot.slice(0, 16);
 
 // --------------------
 // Puppeteer helpers
 // --------------------
-async function autoScroll(page) {
+const autoScroll = async (page) => {
     let totalHeight = 0;
     const distance = 300;
     while (true) {
         const scrollHeight = await page.evaluate("document.body.scrollHeight");
         await page.evaluate(`window.scrollBy(0, ${distance})`);
         totalHeight += distance;
-        await new Promise(r => setTimeout(r, 500 + Math.random() * 300));
+        await new Promise((r) => setTimeout(r, 500 + Math.random() * 300));
         if (totalHeight >= scrollHeight) break;
     }
-    await new Promise(r => setTimeout(r, 3000));
-}
+    await new Promise((r) => setTimeout(r, 3000));
+};
 
-async function getAvailabilityEndpoints() {
+const getAvailabilityEndpoints = async () => {
     const endpointMap = new Map();
     for (const searchUrl of SEARCH_URLS) {
-        const browser = await puppeteer.launch({
-            headless: "new",
-        });
+        const browser = await puppeteer.launch({ headless: "new" });
         const page = await browser.newPage();
-        page.on("request", request => {
+        page.on("request", (request) => {
             const reqUrl = request.url();
             if (reqUrl.includes("/search/availabilities.json")) {
                 endpointMap.set(reqUrl, searchUrl);
             }
         });
-        await page.goto(searchUrl, {waitUntil: "networkidle2"});
+        await page.goto(searchUrl, { waitUntil: "networkidle2" });
         await autoScroll(page);
         await browser.close();
     }
     return endpointMap;
-}
+};
 
 // --------------------
 // Fetch JSON & extract slots
 // --------------------
-async function fetchSlots(jsonUrl) {
+const fetchSlots = async (jsonUrl) => {
     try {
-        const res = await fetch(jsonUrl, {headers: {"User-Agent": "Mozilla/5.0"}});
+        const res = await fetch(jsonUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
         const data = await res.json();
+
         if (res.status === 429 || res.status === 403 || (data.error && data.error.toLowerCase().includes("try again later"))) {
-            console.warn(`⚠️ Rate limited on ${jsonUrl}. Waiting before next attempt...`);
-            await new Promise(r => setTimeout(r, 60_000));
-            return {slots: [], nextSlot: null};
+            console.warn(`⚠️ Rate limited on ${jsonUrl}. Waiting 1 min before retry...`);
+            await new Promise((r) => setTimeout(r, 60_000));
+            return { slots: [], nextSlot: null };
         }
+
         const slots = data.availabilities?.flatMap(d => d.slots || []) || [];
         const nextSlot = data.next_slot || null;
-        return {slots, nextSlot};
+        return { slots, nextSlot };
     } catch (err) {
         console.error(`💥 Error fetching ${jsonUrl}:`, err);
-        return {slots: [], nextSlot: null};
+        return { slots: [], nextSlot: null };
     }
-}
+};
 
 // --------------------
 // Main loop
 // --------------------
-async function checkAllEndpoints() {
+const checkAllEndpoints = async () => {
     const lastSlots = loadLastSlots();
     const endpointMap = await getAvailabilityEndpoints();
 
     const groupMap = new Map(); // key = city + keyword
 
     for (const [jsonUrl, searchUrl] of endpointMap.entries()) {
-        const {slots, nextSlot} = await fetchSlots(jsonUrl);
+        const { slots, nextSlot } = await fetchSlots(jsonUrl);
         if (!slots.length && !nextSlot) continue;
 
-        const {city, keyword} = parseUrl(searchUrl);
+        const { city, keyword } = parseUrl(searchUrl);
         const key = `${city} | ${keyword}`;
 
-        if (!groupMap.has(key)) groupMap.set(key, {
-            slots: [], nextSlot: null, searchUrl
-        });
-
+        if (!groupMap.has(key)) groupMap.set(key, { slots: [], nextSlot: null, searchUrl });
         const entry = groupMap.get(key);
+
         entry.slots.push(...slots);
         if (!entry.nextSlot || (nextSlot && new Date(nextSlot) < new Date(entry.nextSlot))) {
             entry.nextSlot = nextSlot;
         }
     }
 
-    // --------------------
-    // Send messages per group
-    // --------------------
-    function normalizeSlot(slot) {
-        // Keep only YYYY-MM-DDTHH:MM to avoid duplicates from seconds or formatting
-        return slot.slice(0, 16);
-    }
-
-    for (const [key, {slots, nextSlot, searchUrl}] of groupMap.entries()) {
-        // Ensure lastSlots[key] exists
+    // Send notifications per group
+    for (const [key, { slots, nextSlot, searchUrl }] of groupMap.entries()) {
+        // Initialize safely
         if (!lastSlots[key]) lastSlots[key] = { notifiedSlots: [], next_slot: null };
         if (!Array.isArray(lastSlots[key].notifiedSlots)) lastSlots[key].notifiedSlots = [];
 
-        const alreadyNotified = new Set(lastSlots[key].notifiedSlots.map(normalizeSlot));
+        // Determine new slots
+        const alreadyNotified = new Set(lastSlots[key].notifiedSlots);
         const newSlotsNormalized = slots.filter(s => !alreadyNotified.has(normalizeSlot(s)));
 
+        // Only send if there’s new info
         if (!newSlotsNormalized.length && lastSlots[key].next_slot === nextSlot) {
             console.log(`ℹ️ No new slots for ${key}`);
             continue;
         }
 
-        // Build message
         let msgLines = [`🩺 ${key}`, `🔗 Doctolib: ${searchUrl}`];
 
         if (newSlotsNormalized.length) {
@@ -185,15 +177,17 @@ async function checkAllEndpoints() {
             );
         }
 
-        if (nextSlot) {
+        if (nextSlot && nextSlot !== lastSlots[key].next_slot) {
             msgLines.push(`📅 Next slot: ${formatFrenchDate(nextSlot)}`);
         }
 
-        const msg = msgLines.join("\n");
-        console.log(msg);
-        await sendTelegram(msg);
+        if (msgLines.length > 2) { // Only send meaningful messages
+            const msg = msgLines.join("\n");
+            console.log(msg);
+            await sendTelegram(msg);
+        }
 
-        // Update notified slots safely
+        // Update lastSlots safely
         lastSlots[key].notifiedSlots.push(...newSlotsNormalized.map(normalizeSlot));
         lastSlots[key].notifiedSlots = [...new Set(lastSlots[key].notifiedSlots)];
         lastSlots[key].next_slot = nextSlot;
@@ -201,13 +195,11 @@ async function checkAllEndpoints() {
         saveLastSlots(lastSlots);
     }
 
-    // --------------------
-    // Wait before next check
-    // --------------------
+    // Random delay 8–12 min
     const delay = Math.floor(Math.random() * (12 - 8 + 1) + 8) * 60_000;
     console.log(`⏱ Waiting ${Math.floor(delay / 60000)} min until next check...\n`);
     setTimeout(checkAllEndpoints, delay);
-}
+};
 
 // --------------------
 // Start
