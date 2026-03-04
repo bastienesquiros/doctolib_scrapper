@@ -167,6 +167,8 @@ The scraper will run automatically inside the container and send notifications i
 
 ⚠️ Make sure your .env file is mounted or copied into the container to provide Telegram credentials.
 
+⚠️ Running in a VPS may not work because VPS IP is most likely blocked by Cloudflare
+
 🧑‍💻 Running in Docker avoids node version issues, dependency problems, or conflicts with your local machine.
 
 

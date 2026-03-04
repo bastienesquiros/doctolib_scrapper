@@ -46,7 +46,7 @@ function formatFrenchDate(isoString) {
 function parseUrl(url) {
     const u = new URL(url);
     const city = u.searchParams.get("location")?.toUpperCase() || "UNKNOWN";
-    const keyword = u.searchParams.get("keyword") || "UNKNOWN";
+    const keyword = u.searchParams.get("keyword").toUpperCase() || "UNKNOWN";
     return {city, keyword};
 }
 
@@ -89,7 +89,9 @@ async function autoScroll(page) {
 async function getAvailabilityEndpoints() {
     const endpointMap = new Map();
     for (const searchUrl of SEARCH_URLS) {
-        const browser = await puppeteer.launch({headless: true});
+        const browser = await puppeteer.launch({
+            headless: "new",
+        });
         const page = await browser.newPage();
         page.on("request", request => {
             const reqUrl = request.url();
@@ -153,7 +155,7 @@ async function checkAllEndpoints() {
     }
 
     // Send one message per group
-    for (const [key, {slots, nextSlot, searchUrl, filters}] of groupMap.entries()) {
+    for (const [key, {slots, nextSlot, searchUrl}] of groupMap.entries()) {
         const currentHash = hashSlots(slots);
 
         if (lastSlots[key]?.hash === currentHash && lastSlots[key]?.next_slot === nextSlot) {
