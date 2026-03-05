@@ -1,5 +1,5 @@
 node_modules
 .git
 .idea
-lastSlots.json
+doctolib_state.json
 .env
